@@ -21,7 +21,8 @@ also stay clean.
 - `src/edidgen/tables.py`: field encodings, the `VICS` table, and `ROOT_KEYS`
 - `src/edidgen/model.py`: frozen dataclasses (`Config`, `Timing`, ...)
 - `src/edidgen/reader.py`: `Diagnostics` and `Reader` (typed TOML access that records errors)
-- `src/edidgen/timing.py`: CVT-RB v1/v2 generators
+- `src/edidgen/timing.py`: CVT generators (`cvt_exact`: standard CVT and RB1/RB2/RB3 with
+  interlace, margins and the RB2/RB3 options; `cvt_rb` / `cvt_rb2` wrappers)
 - `src/edidgen/config.py`: `parse_config` (per-field checks) and `cross_check` (multi-field checks)
 - `src/edidgen/encode.py`: `build_edid` and the byte encoders
 - `src/edidgen/cli.py`: argparse entry point (`edidgen` script, `python -m edidgen`)
@@ -45,9 +46,11 @@ also stay clean.
   change is intentional, regenerate it
   (`uv run edidgen examples/virtual-display.toml -o tests/data/virtual-display.bin`) and say
   so in the commit.
-- Timing math follows edid-decode's `calc_cvt_mode` (in v4l-utils, `calc-gtf-cvt.cpp`) and is
-  checked against `edid-decode --cvt` over a sweep of sizes and rates. Verify new timing code
-  there and don't trust memory of the spec. Details that matter:
+- Timing math is a port of edid-decode's `calc_cvt_mode` (in v4l-utils,
+  `utils/edid-decode/calc-gtf-cvt.cpp`). `tests/test_edid_decode.py` checks it against
+  `edid-decode --cvt` for every variant, round-trips encoded DTDs through edid-decode, and runs
+  `edid-decode -c` on a set of configs. Verify new timing or encoding code there and don't
+  trust memory of the spec. Details that matter:
   - Pixel-clock math uses exact `Fraction`s: CVT floors to a clock step, and floats lose a step
     when the exact value lands on a boundary. edid-decode itself does this in `double`, so on
     those boundaries it reports one step low; the sweep test allows exactly that case.
@@ -55,6 +58,14 @@ also stay clean.
     (else 10); the clock uses the active width rounded down to 8 pixels.
   - RB2: 1 kHz clock steps, rounded down to the DTD's 10 kHz. CVT-RB2 puts the computed lines
     in the *front* porch; we clamp it to 63 for the 6-bit DTD field and move the excess to the
-    back porch.
+    back porch. RB3 rounds the clock up instead.
+  - `edid-decode --cvt` needs `interlaced=1` / `alt=1`: a bare flag sets them to 0. It also
+    raises RB3 `vblank` below 460 µs to 460, so the config accepts only 460-920.
+  - DTD conventions (edid-decode's reading): interlaced DTDs store lines per field with flag
+    bit 7, and each field has an extra half line; borders are included in the blanking fields
+    (twice) but not in the front porch. A DTD clock below 10 MHz is treated as invalid.
+  - edid-decode's refresh for interlaced modes ignores vertical borders, so interlaced +
+    margins fails its range check; that's its inconsistency, and the conformance test skips
+    that combination.
 - `edid-decode -c` on HDMI configs reports one known failure ("requires EDID 1.3 instead of
   1.4"). This is intentional: 10-bit color needs EDID 1.4.

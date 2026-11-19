@@ -2,17 +2,18 @@
 
 from typing import Final
 
-from edidgen.encode import cta_data_blocks
+from edidgen.encode import cta_data_blocks, dtd_limit_errors
 from edidgen.model import Config, Display, Hdmi, Hdr, RangeLimits, Timing, TimingKind
 from edidgen.reader import Diagnostics, Reader, Table
 from edidgen.tables import (
     BIT_DEPTHS,
     DEEP_COLOR_BITS,
     DTD_MAX_PCLK_MHZ,
+    DTD_MIN_PCLK_MHZ,
     INTERFACES,
     VICS,
 )
-from edidgen.timing import cvt_rb, cvt_rb2
+from edidgen.timing import ReducedBlanking, cvt_exact
 
 
 EXPLICIT_KEYS: Final = (
@@ -24,6 +25,101 @@ EXPLICIT_KEYS: Final = (
     "v_sync",
     "v_back",
 )
+CVT_KINDS: Final = {
+    TimingKind.CVT: ReducedBlanking.NONE,
+    TimingKind.CVT_RB: ReducedBlanking.V1,
+    TimingKind.CVT_RB2: ReducedBlanking.V2,
+    TimingKind.CVT_RB3: ReducedBlanking.V3,
+}
+EXPLICIT: Final = frozenset({TimingKind.EXPLICIT})
+# Mode options that only make sense for some timing kinds.
+OPTION_KINDS: Final[dict[str, frozenset[TimingKind]]] = {
+    **dict.fromkeys(
+        (*EXPLICIT_KEYS, "h_sync_positive", "v_sync_positive", "h_border", "v_border"),
+        EXPLICIT,
+    ),
+    "refresh": frozenset(CVT_KINDS),
+    "margins": frozenset(CVT_KINDS),
+    "video_optimized": frozenset({TimingKind.CVT_RB2}),
+    "h_blank": frozenset({TimingKind.CVT_RB3}),
+    "v_blank_us": frozenset({TimingKind.CVT_RB3}),
+    "early_vsync": frozenset({TimingKind.CVT_RB3}),
+}
+
+
+def _check_option_kinds(r: Reader, kind: TimingKind) -> None:
+    for key, kinds in OPTION_KINDS.items():
+        if r.has(key) and kind not in kinds:
+            allowed = " or ".join(f'"{k.value}"' for k in TimingKind if k in kinds)
+            if key == "refresh":
+                msg = "not allowed with explicit timings (it is derived from pixel_clock_mhz and the totals)"
+            else:
+                msg = f"only allowed with timing = {allowed} (timing is {kind.value!r})"
+            r.diag.error(r.where(key), msg)
+            r.seen.add(key)
+
+
+def _parse_explicit(r: Reader, width: int, height: int, *, interlaced: bool) -> Timing:
+    for k in EXPLICIT_KEYS:
+        if not r.has(k):
+            r.diag.error(r.where(k), 'required for timing = "explicit"')
+    return Timing(
+        pclk_mhz=r.number("pixel_clock_mhz", 0.0, DTD_MIN_PCLK_MHZ, DTD_MAX_PCLK_MHZ),
+        h_active=width,
+        h_front=r.integer("h_front", 0, 0, 1023),
+        h_sync=r.integer("h_sync", 0, 1, 1023),
+        h_back=r.integer("h_back", 0, 0, 4095),
+        v_active=height,
+        v_front=r.integer("v_front", 0, 0, 63),
+        v_sync=r.integer("v_sync", 0, 1, 63),
+        v_back=r.integer("v_back", 0, 0, 4095),
+        h_sync_positive=r.boolean("h_sync_positive", default=True),
+        v_sync_positive=r.boolean("v_sync_positive", default=True),
+        interlaced=interlaced,
+        h_border=r.integer("h_border", 0, 0, 255),
+        v_border=r.integer("v_border", 0, 0, 255),
+    )
+
+
+def _parse_cvt(
+    r: Reader,
+    kind: TimingKind,
+    width: int,
+    height: int,
+    *,
+    interlaced: bool,
+    n_errors: int,
+) -> Timing | None:
+    """Read every CVT option, then compute the timing if the mode had no errors so far."""
+    if not r.has("refresh"):
+        r.diag.error(r.where("refresh"), "required")
+    refresh = r.number("refresh", 60.0, 1.0, 1000.0)
+    margins = r.boolean("margins", default=False)
+    video_optimized = r.boolean("video_optimized", default=False)
+    early_vsync = r.boolean("early_vsync", default=False)
+    h_blank = r.integer("h_blank", 80, 80, 200)
+    if h_blank % 8:
+        r.diag.error(r.where("h_blank"), f"must be a multiple of 8 (got {h_blank})")
+    # edid-decode's --cvt raises anything below 460 µs to 460, so that is the floor here.
+    v_blank_us = r.integer("v_blank_us", 460, 460, 920)
+    if v_blank_us > 705:
+        r.diag.warn(
+            r.where("v_blank_us"), "above 705 may not be supported by RB3 sources"
+        )
+    if len(r.diag.errors) != n_errors:
+        return None
+    return cvt_exact(
+        width,
+        height,
+        refresh,
+        CVT_KINDS[kind],
+        interlaced=interlaced,
+        margins=margins,
+        video_optimized=video_optimized,
+        h_blank=h_blank,
+        v_blank_us=v_blank_us,
+        early_vsync=early_vsync,
+    ).timing
 
 
 def parse_mode(r: Reader) -> Timing | None:
@@ -36,75 +132,24 @@ def parse_mode(r: Reader) -> Timing | None:
         r.diag.error(r.where("height"), "required")
     default_kind = "explicit" if any(r.has(k) for k in EXPLICIT_KEYS) else "cvt-rb"
     kind = TimingKind(r.choice("timing", default_kind, [k.value for k in TimingKind]))
+    interlaced = r.boolean("interlaced", default=False)
+    _check_option_kinds(r, kind)
 
-    timing: Timing | None = None
+    timing: Timing | None
     if kind is TimingKind.EXPLICIT:
-        for k in EXPLICIT_KEYS:
-            if not r.has(k):
-                r.diag.error(r.where(k), 'required for timing = "explicit"')
-        if r.has("refresh"):
-            r.diag.error(
-                r.where("refresh"),
-                "not allowed with explicit timings (it is derived "
-                "from pixel_clock_mhz and the totals)",
-            )
-            r.seen.add("refresh")
-        timing = Timing(
-            pclk_mhz=r.number("pixel_clock_mhz", 0.0, 1.0, DTD_MAX_PCLK_MHZ),
-            h_active=width,
-            h_front=r.integer("h_front", 0, 0, 1023),
-            h_sync=r.integer("h_sync", 0, 1, 1023),
-            h_back=r.integer("h_back", 0, 0, 4095),
-            v_active=height,
-            v_front=r.integer("v_front", 0, 0, 63),
-            v_sync=r.integer("v_sync", 0, 1, 63),
-            v_back=r.integer("v_back", 0, 0, 4095),
-            h_sync_positive=r.boolean("h_sync_positive", default=True),
-            v_sync_positive=r.boolean("v_sync_positive", default=True),
-        )
+        timing = _parse_explicit(r, width, height, interlaced=interlaced)
     else:
-        for k in (*EXPLICIT_KEYS, "h_sync_positive", "v_sync_positive"):
-            if r.has(k):
-                r.diag.error(
-                    r.where(k),
-                    f'only allowed with timing = "explicit" (timing is {kind.value!r})',
-                )
-                r.seen.add(k)
-        if not r.has("refresh"):
-            r.diag.error(r.where("refresh"), "required")
-        refresh = r.number("refresh", 60.0, 1.0, 1000.0)
-        if len(r.diag.errors) == n_errors:
-            timing = (cvt_rb if kind is TimingKind.CVT_RB else cvt_rb2)(
-                width, height, refresh
-            )
+        timing = _parse_cvt(
+            r, kind, width, height, interlaced=interlaced, n_errors=n_errors
+        )
     r.finish()
     if len(r.diag.errors) != n_errors or timing is None:
         return None
 
-    # Field-width limits of an 18-byte detailed timing descriptor.
-    h_blank = timing.h_total - timing.h_active
-    v_blank = timing.v_total - timing.v_active
-    limits = [
-        (
-            timing.pclk_mhz <= DTD_MAX_PCLK_MHZ,
-            (
-                f"pixel clock {timing.pclk_mhz:.2f} MHz exceeds the "
-                f'DTD limit of {DTD_MAX_PCLK_MHZ} MHz; lower the refresh rate, try timing = "cvt-rb2", or give explicit timings '
-                "with less blanking"
-            ),
-        ),
-        (h_blank <= 4095, f"horizontal blanking {h_blank} exceeds 4095"),
-        (v_blank <= 4095, f"vertical blanking {v_blank} exceeds 4095"),
-        (
-            timing.h_front <= 1023 and timing.h_sync <= 1023,
-            "h_front/h_sync exceed 1023",
-        ),
-        (timing.v_front <= 63 and timing.v_sync <= 63, "v_front/v_sync exceed 63"),
-    ]
-    for ok, msg in limits:
-        if not ok:
-            r.diag.error(r.path, msg)
-    return timing if all(ok for ok, _ in limits) else None
+    limits = dtd_limit_errors(timing)
+    for msg in limits:
+        r.diag.error(r.path, msg)
+    return None if limits else timing
 
 
 def parse_config(data: Table, diag: Diagnostics) -> Config | None:

@@ -3,6 +3,7 @@
 import pytest
 
 from edidgen import Timing, cvt_rb, cvt_rb2
+from edidgen.timing import ReducedBlanking, cvt_exact
 
 
 # (w, h, hz) -> (pclk MHz, h_front, h_sync, h_back, v_front, v_sync, v_back)
@@ -116,3 +117,78 @@ def test_cvt_rb_aspect_v_sync(size: tuple[int, int], v_sync: int) -> None:
 def test_cvt_rb2_exact_step_boundary() -> None:
     # Exactly 13.53 MHz; double arithmetic (and edid-decode) lands on 13.529.
     assert cvt_rb2(800, 600, 25).pclk_mhz == 13.53
+
+
+# Reference values below come from `edid-decode --cvt` (see test_edid_decode for the sweep).
+
+
+def test_cvt_standard_blanking() -> None:
+    t = cvt_exact(1920, 1080, 60, ReducedBlanking.NONE).timing
+    assert (t.pclk_mhz, t.h_front, t.h_sync, t.h_back) == (173.0, 128, 200, 328)
+    assert (t.v_front, t.v_sync, t.v_back) == (3, 5, 32)
+    assert (t.h_sync_positive, t.v_sync_positive) == (False, True)
+
+
+def test_cvt_interlaced_with_margins() -> None:
+    t = cvt_exact(
+        1920, 1080, 60, ReducedBlanking.NONE, interlaced=True, margins=True
+    ).timing
+    assert t.interlaced
+    assert (t.pclk_mhz, t.h_front, t.h_sync, t.h_back, t.h_border) == (
+        87.5,
+        64,
+        200,
+        264,
+        32,
+    )
+    assert (t.v_front, t.v_sync, t.v_back, t.v_border) == (3, 5, 15, 9)
+    assert t.v_active == 1080
+    assert t.v_active_field == 540
+    assert t.v_total == 540 + 3 + 5 + 15 + 18 + 0.5
+    assert t.label() == "1920x1080i@59.90"
+
+
+def test_cvt_rb2_video_optimized() -> None:
+    result = cvt_exact(1920, 1080, 60, ReducedBlanking.V2, video_optimized=True)
+    assert result.exact_clock_mhz * 1000 // 1 == 133186  # edid-decode: 133.186 MHz
+    assert result.timing.pclk_mhz == 133.18  # rounded down to the DTD's 10 kHz
+
+
+def test_cvt_rb3_options() -> None:
+    t = cvt_exact(
+        1920,
+        1080,
+        60,
+        ReducedBlanking.V3,
+        h_blank=120,
+        v_blank_us=500,
+        early_vsync=True,
+    ).timing
+    assert t.pclk_mhz == 136.36  # edid-decode: 136.354, RB3 rounds up
+    assert (t.h_front, t.h_sync, t.h_back) == (8, 32, 80)
+    assert (t.v_front, t.v_sync, t.v_back) == (9, 8, 17)
+
+
+@pytest.mark.parametrize(
+    ("asked", "used"), [(200, 300), (300, 300), (450, 460), (2000, 920)]
+)
+def test_cvt_rb3_v_blank_is_clamped_like_edid_decode(asked: int, used: int) -> None:
+    def t(v: int) -> Timing:
+        return cvt_exact(2560, 1440, 60, ReducedBlanking.V3, v_blank_us=v).timing
+
+    assert t(asked) == t(used)
+
+
+def test_cvt_rb3_h_blank_is_clamped_to_80_200_in_steps_of_8() -> None:
+    def t(h: int) -> Timing:
+        return cvt_exact(2560, 1440, 60, ReducedBlanking.V3, h_blank=h).timing
+
+    assert t(70) == t(80)
+    assert t(250) == t(200)
+    assert t(127) == t(120)
+
+
+def test_cvt_rb3_early_vsync_keeps_a_front_porch() -> None:
+    # Short blanking: half the blanking lines as back porch would leave no front porch.
+    t = cvt_exact(640, 480, 60, ReducedBlanking.V3, early_vsync=True).timing
+    assert (t.v_front, t.v_sync, t.v_back) == (1, 8, 6)  # edid-decode agrees

@@ -104,3 +104,43 @@ def test_extra_modes_go_into_cta_block() -> None:
     # Two DTDs in the base block, the other two at the CTA DTD offset.
     assert int.from_bytes(edid[128 + offset : 130 + offset], "little") != 0
     assert int.from_bytes(edid[128 + offset + 18 : 130 + offset + 18], "little") != 0
+
+
+def _dtd(edid: bytes) -> bytes:
+    return edid[54:72]
+
+
+def test_interlaced_dtd_stores_field_lines_and_flag() -> None:
+    edid = build_text(
+        'vics = []\n[[modes]]\nwidth = 1920\nheight = 1080\nrefresh = 60\ntiming = "cvt"\n'
+        "interlaced = true\n"
+    )
+    dtd = _dtd(edid)
+    assert dtd[5] | ((dtd[7] >> 4) << 8) == 540  # lines per field
+    assert dtd[17] & 0x80
+
+
+def test_margins_are_stored_as_borders_inside_the_blanking() -> None:
+    edid = build_text(
+        "vics = []\n[[modes]]\nwidth = 1920\nheight = 1080\nrefresh = 60\nmargins = true\n"
+    )
+    dtd = _dtd(edid)
+    assert (dtd[15], dtd[16]) == (32, 19)
+    h_blank = dtd[3] | ((dtd[4] & 0x0F) << 8)
+    assert h_blank == 160 + 2 * 32  # porches + both borders
+
+
+def test_image_size_follows_mode_aspect() -> None:
+    edid = build_text(
+        "vics = []\n[[modes]]\nwidth = 1920\nheight = 1080\nrefresh = 60\n"
+        "[[modes]]\nwidth = 1920\nheight = 1200\nrefresh = 60\n"
+        "[[modes]]\nwidth = 2560\nheight = 1080\nrefresh = 60\n"
+    )
+
+    def size(dtd: bytes) -> tuple[int, int]:
+        return dtd[12] | ((dtd[14] >> 4) << 8), dtd[13] | ((dtd[14] & 0x0F) << 8)
+
+    assert size(edid[54:72]) == (600, 340)  # 16:9 is within 10 mm of the display size
+    assert size(edid[72:90]) == (544, 340)  # 16:10: full height, narrower
+    cta_dtd = edid[128 + edid[130] :][:18]
+    assert size(cta_dtd) == (600, 253)  # 64:27: full width, shorter

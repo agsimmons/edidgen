@@ -1,9 +1,11 @@
 """Config validation: every error is collected and points at the right key."""
 
+from collections.abc import Callable
+
 import pytest
 from helpers import EXAMPLE_TOML, MINIMAL, errors_of, parse_text, with_tables
 
-from edidgen import TimingKind
+from edidgen import Timing, TimingKind
 
 
 def test_minimal_config_is_valid() -> None:
@@ -255,3 +257,137 @@ def test_warnings_do_not_block(text: str, expected: str) -> None:
     cfg, diag = parse_text(text)
     assert cfg is not None, diag.errors
     assert any(expected in w for w in diag.warnings), diag.warnings
+
+
+def _mode(extra: str, size: str = "width = 1920\nheight = 1080\nrefresh = 60\n") -> str:
+    return f"vics = []\n[[modes]]\n{size}{extra}"
+
+
+EXPLICIT_1080 = (
+    "pixel_clock_mhz = 148.5\nh_front = 88\nh_sync = 44\nh_back = 148\n"
+    "v_front = 4\nv_sync = 5\nv_back = 36\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("extra", "check"),
+    [
+        ('timing = "cvt"\n', lambda t: not t.h_sync_positive and t.v_sync_positive),
+        ('timing = "cvt-rb3"\n', lambda t: t.h_front == 8),
+        ('timing = "cvt"\ninterlaced = true\n', lambda t: t.interlaced),
+        ("margins = true\n", lambda t: t.h_border == 32 and t.v_border == 19),
+        (
+            'timing = "cvt-rb2"\nvideo_optimized = true\n',
+            lambda t: t.pclk_mhz == 133.18,
+        ),
+        (
+            'timing = "cvt-rb3"\nh_blank = 160\nv_blank_us = 600\nearly_vsync = true\n',
+            lambda t: t.h_back == 120,
+        ),
+    ],
+)
+def test_new_cvt_options_are_applied(
+    extra: str, check: Callable[[Timing], bool]
+) -> None:
+    cfg, diag = parse_text(_mode(extra))
+    assert cfg is not None, diag.errors
+    assert check(cfg.modes[0])
+
+
+def test_explicit_interlaced_with_borders() -> None:
+    size = "width = 1920\nheight = 1080\n"
+    cfg, diag = parse_text(
+        _mode(EXPLICIT_1080 + "interlaced = true\nh_border = 4\nv_border = 2\n", size)
+    )
+    assert cfg is not None, diag.errors
+    t = cfg.modes[0]
+    assert (t.interlaced, t.h_border, t.v_border) == (True, 4, 2)
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        (
+            "video_optimized = true\n",
+            "modes[0].video_optimized: only allowed with timing = \"cvt-rb2\" (timing is 'cvt-rb')",
+        ),
+        (
+            'timing = "cvt-rb2"\nh_blank = 120\n',
+            'modes[0].h_blank: only allowed with timing = "cvt-rb3"',
+        ),
+        (
+            "early_vsync = true\n",
+            'modes[0].early_vsync: only allowed with timing = "cvt-rb3"',
+        ),
+        (
+            "h_border = 4\n",
+            'modes[0].h_border: only allowed with timing = "explicit"',
+        ),
+        (
+            'timing = "cvt-rb3"\nh_blank = 100\n',
+            "modes[0].h_blank: must be a multiple of 8 (got 100)",
+        ),
+        (
+            'timing = "cvt-rb3"\nh_blank = 240\n',
+            "modes[0].h_blank: must be between 80 and 200 (got 240)",
+        ),
+        (
+            'timing = "cvt-rb3"\nv_blank_us = 300\n',
+            "modes[0].v_blank_us: must be between 460 and 920 (got 300)",
+        ),
+        (
+            'interlaced = "yes"\n',
+            "modes[0].interlaced: expected true/false, got string",
+        ),
+        (
+            'timing = "cvt"\ninterlaced = true\n',
+            "",  # 1080 is even: valid
+        ),
+    ],
+)
+def test_new_option_errors(extra: str, expected: str) -> None:
+    cfg, diag = parse_text(_mode(extra))
+    if not expected:
+        assert cfg is not None, diag.errors
+        return
+    assert cfg is None
+    assert any(e.startswith(expected) for e in diag.errors), diag.errors
+
+
+def test_margins_not_allowed_with_explicit() -> None:
+    errors = errors_of(
+        _mode(EXPLICIT_1080 + "margins = true\n", "width = 1920\nheight = 1080\n")
+    )
+    assert errors == [
+        (
+            'modes[0].margins: only allowed with timing = "cvt" or "cvt-rb" or "cvt-rb2" or "cvt-rb3" '
+            "(timing is 'explicit')"
+        )
+    ]
+
+
+def test_odd_interlaced_height_is_rejected() -> None:
+    size = "width = 1920\nheight = 1081\n"
+    errors = errors_of(_mode(EXPLICIT_1080 + "interlaced = true\n", size))
+    assert errors == ["modes[0]: interlaced height must be even"]
+
+
+def test_pixel_clock_below_dtd_minimum() -> None:
+    # Interlaced 640x480 at 30 fields/s needs under 10 MHz, which decoders reject.
+    errors = errors_of(
+        _mode(
+            'timing = "cvt"\ninterlaced = true\n',
+            "width = 640\nheight = 480\nrefresh = 30\n",
+        )
+    )
+    assert errors == [
+        "modes[0]: pixel clock 5.75 MHz is below the DTD minimum of 10 MHz; decoders treat it as invalid"
+    ]
+
+
+def test_high_rb3_v_blank_warns() -> None:
+    cfg, diag = parse_text(_mode('timing = "cvt-rb3"\nv_blank_us = 800\n'))
+    assert cfg is not None, diag.errors
+    assert diag.warnings == [
+        "modes[0].v_blank_us: above 705 may not be supported by RB3 sources"
+    ]

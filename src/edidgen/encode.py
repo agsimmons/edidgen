@@ -3,19 +3,72 @@
 import math
 from typing import TYPE_CHECKING
 
-from edidgen.tables import BIT_DEPTHS, DEEP_COLOR_BITS, INTERFACES, VICS
+from edidgen.tables import (
+    BIT_DEPTHS,
+    DEEP_COLOR_BITS,
+    DTD_MAX_PCLK_MHZ,
+    DTD_MIN_PCLK_MHZ,
+    ESTABLISHED_640X480,
+    INTERFACES,
+    VICS,
+)
 
 
 if TYPE_CHECKING:
     from edidgen.model import Config, Timing
 
 
+def dtd_limit_errors(t: Timing) -> list[str]:
+    """Problems that keep `t` from fitting an 18-byte detailed timing descriptor."""
+    checks = [
+        (
+            t.pclk_mhz <= DTD_MAX_PCLK_MHZ,
+            (
+                f"pixel clock {t.pclk_mhz:.2f} MHz exceeds the DTD limit of {DTD_MAX_PCLK_MHZ} MHz; "
+                'lower the refresh rate, try timing = "cvt-rb2", or give explicit timings with '
+                "less blanking"
+            ),
+        ),
+        (
+            t.pclk_mhz >= DTD_MIN_PCLK_MHZ,
+            (
+                f"pixel clock {t.pclk_mhz:.2f} MHz is below the DTD minimum of "
+                f"{DTD_MIN_PCLK_MHZ:g} MHz; decoders treat it as invalid"
+            ),
+        ),
+        (t.h_blank <= 4095, f"horizontal blanking {t.h_blank} exceeds 4095"),
+        (t.v_blank <= 4095, f"vertical blanking {t.v_blank} exceeds 4095"),
+        (t.h_front <= 1023 and t.h_sync <= 1023, "h_front/h_sync exceed 1023"),
+        (t.v_front <= 63 and t.v_sync <= 63, "v_front/v_sync exceed 63"),
+        (t.h_border <= 255 and t.v_border <= 255, "borders exceed 255"),
+        (not t.interlaced or t.v_active % 2 == 0, "interlaced height must be even"),
+    ]
+    return [msg for ok, msg in checks if not ok]
+
+
+def image_size_mm(t: Timing, size_cm: tuple[int, int]) -> tuple[int, int]:
+    """The display size fitted to the mode's aspect ratio (bars on the short side).
+
+    edid-decode warns when a DTD's image size is more than 10 mm off the mode's
+    aspect ratio, so modes within that keep the plain display size.
+    """
+    w, h = size_cm[0] * 10, size_cm[1] * 10
+    fit_h = w * t.v_active // t.h_active
+    fit_w = h * t.h_active // t.v_active
+    if fit_h <= h:  # wider than the display: full width, shorter
+        return (w, h) if h - fit_h <= 10 else (w, fit_h)
+    return (w, h) if w - fit_w <= 10 else (fit_w, h)
+
+
 def encode_dtd(t: Timing, size_cm: tuple[int, int]) -> bytes:
     p = round(t.pclk_mhz * 100)
-    hb, vb = t.h_total - t.h_active, t.v_total - t.v_active
-    hmm, vmm = size_cm[0] * 10, size_cm[1] * 10
+    hb, vb, va = t.h_blank, t.v_blank, t.v_active_field
+    hmm, vmm = image_size_mm(t, size_cm)
     flags = (
-        0x18 | (0x04 if t.v_sync_positive else 0) | (0x02 if t.h_sync_positive else 0)
+        0x18
+        | (0x80 if t.interlaced else 0)
+        | (0x04 if t.v_sync_positive else 0)
+        | (0x02 if t.h_sync_positive else 0)
     )
     return bytes(
         [
@@ -24,9 +77,9 @@ def encode_dtd(t: Timing, size_cm: tuple[int, int]) -> bytes:
             t.h_active & 0xFF,
             hb & 0xFF,
             ((t.h_active >> 8) << 4) | (hb >> 8),
-            t.v_active & 0xFF,
+            va & 0xFF,
             vb & 0xFF,
-            ((t.v_active >> 8) << 4) | (vb >> 8),
+            ((va >> 8) << 4) | (vb >> 8),
             t.h_front & 0xFF,
             t.h_sync & 0xFF,
             ((t.v_front & 0xF) << 4) | (t.v_sync & 0xF),
@@ -37,8 +90,8 @@ def encode_dtd(t: Timing, size_cm: tuple[int, int]) -> bytes:
             hmm & 0xFF,
             vmm & 0xFF,
             ((hmm >> 8) << 4) | (vmm >> 8),
-            0,
-            0,
+            t.h_border,
+            t.v_border,
             flags,
         ]
     )
@@ -54,17 +107,19 @@ def text_descriptor(tag: int, text: str) -> bytes:
 def range_descriptor(cfg: Config) -> bytes:
     r = cfg.range_limits
     modes = cfg.modes
-    vics = [VICS[v] for v in cfg.vics]
-    rates = [t.refresh for t in modes] + [v.refresh for v in vics]
-    hfreqs = [t.hfreq_khz for t in modes]
-    clocks = [t.pclk_mhz for t in modes] + [v.pclk_mhz for v in vics]
+    # Derived limits cover every advertised timing: the DTDs, the VICs and the
+    # established 640x480 mode that is always present.
+    others = [VICS[v] for v in cfg.vics] + [ESTABLISHED_640X480]
+    rates = [t.refresh for t in modes] + [v.refresh for v in others]
+    hfreqs = [t.hfreq_khz for t in modes] + [v.hfreq_khz for v in others]
+    clocks = [t.pclk_mhz for t in modes] + [v.pclk_mhz for v in others]
     vmin, vmax = r.vrefresh_hz or (
         max(1, math.floor(min(rates))),
         min(255, math.ceil(max(rates))),
     )
     hmin, hmax = r.hfreq_khz or (
-        max(1, math.floor(min(hfreqs, default=15))),
-        min(255, math.ceil(max(hfreqs, default=255))),
+        max(1, math.floor(min(hfreqs))),
+        min(255, math.ceil(max(hfreqs))),
     )
     pmax = r.max_pixel_clock_mhz or math.ceil(max(clocks) / 10) * 10
     return (

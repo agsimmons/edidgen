@@ -50,8 +50,20 @@ max_pixel_clock_mhz = 600
 # block; the rest go in the CTA block (the tool tells you if they don't fit).
 #   timing = "cvt-rb"   (default) VESA reduced blanking v1: width, height, refresh
 #   timing = "cvt-rb2"  reduced blanking v2, lower pixel clock (e.g. 1440p144 fits 600 MHz)
+#   timing = "cvt-rb3"  reduced blanking v3 (clock rounded up rather than down)
+#   timing = "cvt"      standard CVT blanking (for CRT-era sinks; much higher clock)
 #   timing = "explicit" give pixel_clock_mhz, h/v_front, h/v_sync, h/v_back,
 #                       h/v_sync_positive yourself (implied if any is present)
+# Optional, per mode:
+#   interlaced = true       any timing; `refresh` is then the field rate (1080i60 = 60)
+#   margins = true          CVT timings: 1.8% overscan margins, stored as DTD borders
+#                           (edid-decode warns that DTD borders are not recommended)
+#   video_optimized = true  cvt-rb2: rate x 1000/1001 (60 -> 59.94)
+#   h_blank = 80            cvt-rb3: horizontal blanking, 80-200 in steps of 8
+#   v_blank_us = 460        cvt-rb3: vertical blanking time, 460-920 (warns above 705)
+#   early_vsync = true      cvt-rb3: vsync early in the blanking
+#   h_border, v_border      explicit: border pixels/lines, 0-255
+# A DTD's pixel clock must be 10-655.35 MHz.
 [[modes]]
 width = 2560
 height = 1440

@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-18
+
 ### Added
 
 - `edidgen` command that builds a 256-byte EDID (base block + CTA-861 extension) from a
@@ -25,4 +27,5 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Each detailed mode reports the display's image size fitted to its aspect ratio.
 - Example config for a virtual 1440p/4K HDMI display.
 
-[Unreleased]: https://github.com/agsimmons/edidgen/commits/main
+[Unreleased]: https://github.com/agsimmons/edidgen/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/agsimmons/edidgen/releases/tag/v0.1.0

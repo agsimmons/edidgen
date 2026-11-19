@@ -25,6 +25,12 @@ dev = [
 [project.scripts]
 edidgen = "edidgen.cli:main"
 
+[tool.pytest.ini_options]
+# Parallel by default: the edid-decode tests spend their time in subprocesses.
+# More than ~8 workers is slower again (startup cost). Use `-n 0` to run serially,
+# e.g. when debugging with breakpoints.
+addopts = ["-n", "auto", "--maxprocesses", "8"]
+
 [tool.ruff.lint]
 extend-select = ["I", "ANN"]
 ignore = ["ANN401", "RUF012"]
@@ -35,9 +41,3 @@ lines-after-imports = 2
 [build-system]
 requires = ["uv_build>=0.9,<0.14"]
 build-backend = "uv_build"
-
-[tool.pytest.ini_options]
-# Parallel by default: the edid-decode tests spend their time in subprocesses.
-# More than ~8 workers is slower again (startup cost). Use `-n 0` to run serially,
-# e.g. when debugging with breakpoints.
-addopts = ["-n", "auto", "--maxprocesses", "8"]

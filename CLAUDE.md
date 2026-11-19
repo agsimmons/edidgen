@@ -7,14 +7,14 @@ for a virtual display, e.g. Sunshine streaming.
 ## Commands
 
 ```bash
-uv run pytest                                   # tests (edid-decode ones skip if it's missing)
+uv run pytest                                   # parallel (xdist); -n 0 to run serially
 uv run ruff check && uv run ruff format --check   # also run by pre-commit
 uv run ty check
 uv run edidgen examples/virtual-display.toml --decode
 ```
 
-Run all three checks before committing. `uv run --with mypy mypy --strict src tests` should
-also stay clean.
+The edid-decode tests skip if it isn't installed. Run all three checks before committing.
+`uv run --with mypy mypy --strict src tests` should also stay clean.
 
 ## Layout
 

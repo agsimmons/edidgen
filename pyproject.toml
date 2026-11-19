@@ -8,6 +8,10 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = []
 
+[project.urls]
+Repository = "https://github.com/agsimmons/edidgen"
+Changelog = "https://github.com/agsimmons/edidgen/blob/main/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.2.0,<5",

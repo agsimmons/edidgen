@@ -77,3 +77,19 @@ The edid-decode tests skip if it isn't installed. Run all three checks before co
     that combination.
 - `edid-decode -c` on HDMI configs reports one known failure ("requires EDID 1.3 instead of
   1.4"). This is intentional: 10-bit color needs EDID 1.4.
+
+## Changelog and releases
+
+`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Add each
+user-visible change under `## [Unreleased]` in the same commit as the change.
+
+To release version X.Y.Z:
+
+1. Set `version` in `pyproject.toml` to X.Y.Z and run `uv lock`.
+2. In `CHANGELOG.md`, rename `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`, add a fresh empty
+   `## [Unreleased]` above it, and update the compare links at the bottom.
+3. Commit as `Release X.Y.Z` (only those changes), and tag that commit with a lightweight tag
+   `vX.Y.Z` (`git tag vX.Y.Z`).
+4. Build from the tag: `rm -rf dist && uv build`.
+5. Publish: `uv publish`. Needs the user's API token (`UV_PUBLISH_TOKEN`), so the user runs
+   this step.

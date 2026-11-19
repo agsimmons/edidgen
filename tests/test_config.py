@@ -75,6 +75,9 @@ def test_defaults() -> None:
             "range.vrefresh_hz: min 120 is greater than max 24",
         ),
         ("display = 3", "display: expected table, got integer"),
+        ('[display]\ngamma = "2.2"', "display.gamma: expected number, got string"),
+        ("[display]\ngamma = 5", "display.gamma: must be between 1 and 3.54 (got 5)"),
+        ("[display]\nname = 1", "display.name: expected string, got integer"),
     ],
 )
 def test_field_errors(snippet: str, expected: str) -> None:
@@ -107,6 +110,7 @@ def test_field_errors(snippet: str, expected: str) -> None:
             "width = 2560\nheight = 1440\nrefresh = 165",
             "exceeds the DTD limit of 655.35 MHz",
         ),
+        ("height = 1080\nrefresh = 60", "modes[0].width: required"),
         (
             "width = 1920\nheight = 1080\nrefresh = 60\nfoo = 1",
             "modes[0].foo: unknown option",
@@ -139,11 +143,17 @@ def test_explicit_mode_is_inferred() -> None:
     assert TimingKind("explicit") is TimingKind.EXPLICIT
 
 
-def test_missing_modes() -> None:
-    assert any(
-        "at least one [[modes]] entry is required" in e
-        for e in errors_of("vics = [16]\n")
-    )
+@pytest.mark.parametrize("text", ["vics = [16]\n", "vics = [16]\nmodes = []\n"])
+def test_missing_or_empty_modes(text: str) -> None:
+    assert errors_of(text) == [
+        "modes: at least one [[modes]] entry is required (the first is the preferred mode)"
+    ]
+
+
+def test_modes_of_wrong_type_is_reported_once() -> None:
+    assert errors_of("vics = [16]\nmodes = 3\n") == [
+        "modes: expected an array of tables ([[modes]])"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -152,6 +162,7 @@ def test_missing_modes() -> None:
         ("[200]", "vics[0]: VIC 200 is not in the supported table"),
         ('[16, "x"]', "vics[1]: expected integer, got string"),
         ("16", "vics: expected array of integers, got integer"),
+        ("[300]", "vics[0]: must be between 1 and 219 (got 300)"),
         (
             "[97]",
             "vics[0]: VIC 97 (3840x2160@60) needs 594 MHz but hdmi.max_tmds_mhz is 340",
@@ -217,6 +228,26 @@ def test_all_errors_are_collected() -> None:
         (
             with_tables("[hdr]\nenabled = true"),
             "HDR usually needs display.bit_depth >= 10",
+        ),
+        (
+            with_tables("[hdmi]\ndeep_color = [30]"),
+            "deep color advertised but display.bit_depth is below 10",
+        ),
+        (with_tables("", top="vics = [16, 16]"), "vics: contains duplicates"),
+        (
+            with_tables("[range]\nhfreq_khz = [15, 50]"),
+            "line rate 66.6 kHz is outside range.hfreq_khz [15, 50]",
+        ),
+        (
+            with_tables("[range]\nmax_pixel_clock_mhz = 100"),
+            "pixel clock 138.50 MHz is above range.max_pixel_clock_mhz 100",
+        ),
+        (
+            (
+                "vics = []\n[hdmi]\nmax_tmds_mhz = 600\nscdc = false\n"
+                "[[modes]]\nwidth = 2560\nheight = 1440\nrefresh = 120\n"
+            ),
+            "above 340 MHz; HDMI 2.0 rates usually need hdmi.scdc = true",
         ),
     ],
 )

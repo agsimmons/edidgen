@@ -7,6 +7,7 @@ from edidgen.encode import nits_to_cv
 
 HDMI_OUI = bytes([0x03, 0x0C, 0x00])
 HF_OUI = bytes([0xD8, 0x5D, 0xC4])
+BT2020_BLOCK = bytes([0xE3, 0x05, 0xC0, 0x00])  # colorimetry: BT2020 RGB + YCC
 
 
 def test_example_config_matches_golden_binary() -> None:
@@ -31,6 +32,11 @@ def test_manufacturer_and_name() -> None:
     assert b"\x00\x00\x00\xfc\x00Hello\n       " in edid[:128]
 
 
+def test_13_char_name_has_no_terminator() -> None:
+    edid = build_text(with_tables('[display]\nname = "ThirteenChars"'))
+    assert b"\x00\x00\x00\xfc\x00ThirteenChars" in edid[:128]
+
+
 def test_single_mode_uses_dummy_second_descriptor() -> None:
     edid = build_text(MINIMAL)
     assert edid[72:76] == bytes([0, 0, 0, 0x10])
@@ -52,6 +58,11 @@ def test_hdmi_blocks_follow_config() -> None:
     hf = hdmi.index(HF_OUI)
     assert hdmi[hf + 4] == 600 // 5
 
+    # HDMI 1.4 only: no HF-VSDB unless above 340 MHz or SCDC is wanted.
+    hdmi14 = build_text(with_tables("[hdmi]\nscdc = false"))
+    assert HDMI_OUI in hdmi14[128:]
+    assert HF_OUI not in hdmi14[128:]
+
     plain = build_text(with_tables('[display]\ninterface = "dp"'))
     assert HDMI_OUI not in plain[128:]
     assert HF_OUI not in plain[128:]
@@ -68,6 +79,11 @@ def test_hdr_blocks_only_when_enabled() -> None:
     assert hdr_tag not in build_text(MINIMAL)
     enabled = build_text(with_tables("[hdr]\nenabled = true\nmax_luminance_nits = 670"))
     assert hdr_tag in enabled
+    assert BT2020_BLOCK in enabled
+
+    no_bt2020 = build_text(with_tables("[hdr]\nenabled = true\nbt2020 = false"))
+    assert bytes([0xE3, 0x06, 0x05, 0x01]) in no_bt2020  # HDR block without luminance
+    assert BT2020_BLOCK not in no_bt2020
 
 
 def test_nits_to_cv() -> None:

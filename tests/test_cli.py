@@ -1,5 +1,7 @@
 """End-to-end CLI behaviour: exit codes, output paths, and what gets written."""
 
+import runpy
+import shutil
 from typing import TYPE_CHECKING
 
 import pytest
@@ -92,7 +94,33 @@ def test_unwritable_output_exits_2(
     assert "cannot write" in capsys.readouterr().err
 
 
-def test_module_entry_point_help() -> None:
+def test_help_exits_0() -> None:
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
     assert exc.value.code == 0
+
+
+def test_python_dash_m(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.argv", ["edidgen", str(EXAMPLE_TOML), "--check"])
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_module("edidgen", run_name="__main__")
+    assert exc.value.code == 0
+
+
+def test_decode_without_edid_decode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("edidgen.cli.shutil.which", lambda _name: None)
+    assert main([str(write(tmp_path, MINIMAL)), "--decode"]) == 0
+    assert "edid-decode not installed; skipping" in capsys.readouterr().err
+    assert (tmp_path / "cfg.bin").exists()
+
+
+@pytest.mark.skipif(
+    shutil.which("edid-decode") is None, reason="edid-decode not installed"
+)
+def test_decode_runs_edid_decode(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    assert main([str(write(tmp_path, MINIMAL)), "--decode"]) == 0
+    assert "EDID conformity:" in capfd.readouterr().out

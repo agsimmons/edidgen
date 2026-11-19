@@ -203,7 +203,8 @@ def parse_config(data: Table, diag: Diagnostics) -> Config | None:
     g.finish()
 
     mode_readers = root.table_list("modes")
-    if not mode_readers and "modes" not in data:
+    # A non-array `modes` was already reported by table_list.
+    if not mode_readers and data.get("modes", []) == []:
         diag.error(
             "modes",
             "at least one [[modes]] entry is required (the first is the preferred mode)",
@@ -228,12 +229,15 @@ def parse_config(data: Table, diag: Diagnostics) -> Config | None:
     cfg = Config(
         output, display, range_limits, hdmi, hdr, modes, tuple(vics), native_vic
     )
-    cross_check(cfg, parsed_ok=len(modes) == len(mode_readers), diag=diag)
+    cross_check(cfg, diag)
     return None if diag.errors else cfg
 
 
-def cross_check(cfg: Config, *, parsed_ok: bool, diag: Diagnostics) -> None:
-    """Checks that involve more than one option."""
+def cross_check(cfg: Config, diag: Diagnostics) -> None:
+    """Checks that involve more than one option.
+
+    Only called once every field parsed cleanly, so `cfg.modes` is complete and non-empty.
+    """
     seen: dict[tuple[int, int, int], str] = {}
     for i, t in enumerate(cfg.modes):
         key = (t.h_active, t.v_active, round(t.refresh))
@@ -265,30 +269,29 @@ def cross_check(cfg: Config, *, parsed_ok: bool, diag: Diagnostics) -> None:
         diag.warn("vics", "contains duplicates")
 
     r = cfg.range_limits
-    if parsed_ok and cfg.modes:
-        if r.vrefresh_hz:
-            for i, t in enumerate(cfg.modes):
-                if not r.vrefresh_hz[0] <= round(t.refresh) <= r.vrefresh_hz[1]:
-                    diag.warn(
-                        f"modes[{i}]",
-                        f"{t.label()} is outside range.vrefresh_hz {list(r.vrefresh_hz)}",
-                    )
-        if r.hfreq_khz:
-            for i, t in enumerate(cfg.modes):
-                if not r.hfreq_khz[0] <= t.hfreq_khz <= r.hfreq_khz[1] + 0.999:
-                    diag.warn(
-                        f"modes[{i}]",
-                        f"{t.label()} line rate {t.hfreq_khz:.1f} kHz is outside "
-                        f"range.hfreq_khz {list(r.hfreq_khz)}",
-                    )
-        if r.max_pixel_clock_mhz:
-            for i, t in enumerate(cfg.modes):
-                if t.pclk_mhz > r.max_pixel_clock_mhz:
-                    diag.warn(
-                        f"modes[{i}]",
-                        f"{t.label()} pixel clock {t.pclk_mhz:.2f} MHz is above "
-                        f"range.max_pixel_clock_mhz {r.max_pixel_clock_mhz}",
-                    )
+    if r.vrefresh_hz:
+        for i, t in enumerate(cfg.modes):
+            if not r.vrefresh_hz[0] <= round(t.refresh) <= r.vrefresh_hz[1]:
+                diag.warn(
+                    f"modes[{i}]",
+                    f"{t.label()} is outside range.vrefresh_hz {list(r.vrefresh_hz)}",
+                )
+    if r.hfreq_khz:
+        for i, t in enumerate(cfg.modes):
+            if not r.hfreq_khz[0] <= t.hfreq_khz <= r.hfreq_khz[1] + 0.999:
+                diag.warn(
+                    f"modes[{i}]",
+                    f"{t.label()} line rate {t.hfreq_khz:.1f} kHz is outside "
+                    f"range.hfreq_khz {list(r.hfreq_khz)}",
+                )
+    if r.max_pixel_clock_mhz:
+        for i, t in enumerate(cfg.modes):
+            if t.pclk_mhz > r.max_pixel_clock_mhz:
+                diag.warn(
+                    f"modes[{i}]",
+                    f"{t.label()} pixel clock {t.pclk_mhz:.2f} MHz is above "
+                    f"range.max_pixel_clock_mhz {r.max_pixel_clock_mhz}",
+                )
 
     if cfg.hdmi.deep_color and cfg.display.bit_depth < 10:
         diag.warn(

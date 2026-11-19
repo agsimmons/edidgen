@@ -1,8 +1,10 @@
 """Cross-check against edid-decode (skipped when it isn't installed)."""
 
+import math
 import re
 import shutil
 import subprocess
+from fractions import Fraction
 from typing import TYPE_CHECKING
 
 import pytest
@@ -17,13 +19,16 @@ if TYPE_CHECKING:
 EDID_DECODE = shutil.which("edid-decode")
 pytestmark = pytest.mark.skipif(EDID_DECODE is None, reason="edid-decode not installed")
 
-MODES = [
-    (1280, 720, 60),
-    (1280, 800, 90),
-    (1920, 1080, 120),
-    (2560, 1440, 60),
-    (3440, 1440, 100),
-]
+# Sizes cover every CVT aspect class (4:3, 16:9, 16:10, 5:4, 15:9) plus non-standard
+# ones, and widths that aren't multiples of 8 (RB1 rounds those for the clock).
+SIZES = [
+    (640, 480), (800, 600), (1024, 768), (1280, 720), (1280, 768), (1280, 800),
+    (1280, 1024), (1366, 768), (1440, 900), (1600, 900), (1680, 1050), (1920, 1080),
+    (1920, 1200), (2048, 1536), (2400, 1080), (2560, 1080), (2560, 1440), (2560, 1600),
+    (2736, 1824), (2880, 1800), (3024, 1964), (3440, 1440), (3840, 1600), (3840, 2160),
+]  # fmt: skip
+RATES = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 72, 75, 85, 90, 100, 110, 119.88,
+         120, 144, 165, 170, 175, 180, 200, 240]  # fmt: skip
 TIMING_RE = re.compile(
     r"([\d.]+) MHz.*?Hfront\s+(\d+) Hsync\s+(\d+) Hback\s+(\d+).*?"
     r"Vfront\s+(\d+) Vsync\s+(\d+) Vback\s+(\d+)",
@@ -38,29 +43,66 @@ def decode(*args: str) -> str:
     ).stdout
 
 
-def reference(w: int, h: int, hz: int, rb: int) -> tuple[float, ...]:
+def reference(w: int, h: int, hz: float, rb: int) -> tuple[float, ...]:
     m = TIMING_RE.search(decode("--cvt", f"w={w},h={h},fps={hz},rb={rb}"))
     assert m, "unexpected edid-decode output"
     return (float(m[1]), *(int(g) for g in m.groups()[1:]))
 
 
-@pytest.mark.parametrize("mode", MODES)
-def test_cvt_rb_matches_edid_decode(mode: tuple[int, int, int]) -> None:
-    t = cvt_rb(*mode)
-    ref = reference(*mode, rb=1)
-    assert t.pclk_mhz == pytest.approx(ref[0], abs=0.01)
-    assert (t.h_front, t.h_sync, t.h_back, t.v_front, t.v_sync, t.v_back) == ref[1:]
+def clock_matches(
+    ours: float, expected: float, exact_mhz: Fraction, ref: float, ref_step: float
+) -> bool:
+    """Our clock equals the reference, or the reference lost a step to float error.
+
+    edid-decode floors `rate * total_pixels / step` in double precision, so when the
+    exact value is a whole number of steps it can come out one step low. edidgen
+    uses exact fractions, so in that case it must equal the exact clock.
+    """
+    if math.isclose(ours, expected, abs_tol=1e-9):
+        return True
+    return Fraction(repr(ours)) == exact_mhz and math.isclose(
+        ref, ours - ref_step, abs_tol=1e-9
+    )
 
 
-@pytest.mark.parametrize("mode", MODES)
-def test_cvt_rb2_totals_match_edid_decode(mode: tuple[int, int, int]) -> None:
-    t = cvt_rb2(*mode)
-    ref = reference(*mode, rb=2)
-    assert t.pclk_mhz == pytest.approx(
-        ref[0], abs=0.01
-    )  # RB2 has 1 kHz steps, DTD has 10 kHz
-    assert (t.h_front, t.h_sync, t.h_back, t.v_sync) == (ref[1], ref[2], ref[3], ref[5])
-    assert t.v_front + t.v_back == ref[4] + ref[6]
+@pytest.mark.parametrize("size", SIZES, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_cvt_rb_matches_edid_decode(size: tuple[int, int]) -> None:
+    w, h = size
+    problems = []
+    for hz in RATES:
+        t = cvt_rb(w, h, hz)
+        ref = reference(w, h, hz, rb=1)
+        porches = (t.h_front, t.h_sync, t.h_back, t.v_front, t.v_sync, t.v_back)
+        exact = Fraction(repr(hz)) * t.v_total * (w // 8 * 8 + 160) / 10**6
+        if porches != ref[1:] or not clock_matches(
+            t.pclk_mhz, ref[0], exact, ref[0], 0.25
+        ):
+            problems.append(f"@{hz}: {t.pclk_mhz} MHz {porches} vs {ref}")
+    assert problems == []
+
+
+@pytest.mark.parametrize("size", SIZES, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_cvt_rb2_matches_edid_decode(size: tuple[int, int]) -> None:
+    w, h = size
+    problems = []
+    for hz in RATES:
+        t = cvt_rb2(w, h, hz)
+        ref = reference(w, h, hz, rb=2)
+        # RB2 has 1 kHz steps; a DTD holds 10 kHz, so edidgen rounds down to that.
+        expected = math.floor(ref[0] * 100 + 1e-6) / 100
+        exact = Fraction(repr(hz)) * t.v_total * t.h_total / 10**6
+        # The DTD front porch is 6 bits, so edidgen clamps it to 63 and keeps the total.
+        same_porches = (t.h_front, t.h_sync, t.h_back, t.v_sync) == (
+            ref[1],
+            ref[2],
+            ref[3],
+            ref[5],
+        ) and (t.v_front, t.v_front + t.v_back) == (min(ref[4], 63), ref[4] + ref[6])
+        if not same_porches or not clock_matches(
+            t.pclk_mhz, expected, exact, ref[0], 0.001
+        ):
+            problems.append(f"@{hz}: {t.pclk_mhz} MHz vs {ref}")
+    assert problems == []
 
 
 def failures(path: Path) -> str:

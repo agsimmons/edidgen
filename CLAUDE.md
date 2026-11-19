@@ -45,8 +45,16 @@ also stay clean.
   change is intentional, regenerate it
   (`uv run edidgen examples/virtual-display.toml -o tests/data/virtual-display.bin`) and say
   so in the commit.
-- Timing math is checked against `edid-decode --cvt`. Verify new timing code there and don't
-  trust memory of the spec. (CVT-RB2 puts the computed lines in the *front* porch; we clamp it
-  to 63 for the 6-bit DTD field and move the excess to the back porch.)
+- Timing math follows edid-decode's `calc_cvt_mode` (in v4l-utils, `calc-gtf-cvt.cpp`) and is
+  checked against `edid-decode --cvt` over a sweep of sizes and rates. Verify new timing code
+  there and don't trust memory of the spec. Details that matter:
+  - Pixel-clock math uses exact `Fraction`s: CVT floors to a clock step, and floats lose a step
+    when the exact value lands on a boundary. edid-decode itself does this in `double`, so on
+    those boundaries it reports one step low; the sweep test allows exactly that case.
+  - RB1: minimum vertical back porch 7; v-sync width from exact integer aspect matches
+    (else 10); the clock uses the active width rounded down to 8 pixels.
+  - RB2: 1 kHz clock steps, rounded down to the DTD's 10 kHz. CVT-RB2 puts the computed lines
+    in the *front* porch; we clamp it to 63 for the 6-bit DTD field and move the excess to the
+    back porch.
 - `edid-decode -c` on HDMI configs reports one known failure ("requires EDID 1.3 instead of
   1.4"). This is intentional: 10-bit color needs EDID 1.4.

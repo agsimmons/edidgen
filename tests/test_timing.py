@@ -69,3 +69,50 @@ def test_timing_derived_properties() -> None:
     assert t.refresh == pytest.approx(60.0)
     assert t.hfreq_khz == pytest.approx(135.0)
     assert t.label() == "3840x2160@60.00"
+
+
+@pytest.mark.parametrize(
+    ("mode", "pclk"),
+    [
+        (
+            (640, 480, 50),
+            19.75,
+        ),  # floats gave 19.5: the exact value is on a step boundary
+        ((1024, 768, 30), 27.75),
+        ((2560, 1080, 30), 89.75),
+    ],
+)
+def test_cvt_rb_exact_step_boundaries(mode: tuple[int, int, int], pclk: float) -> None:
+    assert cvt_rb(*mode).pclk_mhz == pclk
+
+
+def test_cvt_rb_min_back_porch_is_7() -> None:
+    t = cvt_rb(1280, 720, 30)  # low rate: the minimum vertical blank applies
+    assert (t.v_front, t.v_sync, t.v_back) == (3, 5, 7)
+    assert t.pclk_mhz == 31.75
+
+
+def test_cvt_rb_non_standard_aspect_uses_10_line_vsync() -> None:
+    # 1366x768 is close to 16:9 but not exactly, so CVT treats it as custom.
+    t = cvt_rb(1366, 768, 60)
+    assert t.v_sync == 10
+    assert t.pclk_mhz == 72.0  # clock uses the width rounded down to 1360
+
+
+@pytest.mark.parametrize(
+    ("size", "v_sync"),
+    [
+        ((1024, 768), 4),
+        ((1920, 1080), 5),
+        ((1920, 1200), 6),
+        ((1280, 1024), 7),
+        ((1280, 768), 7),
+    ],
+)
+def test_cvt_rb_aspect_v_sync(size: tuple[int, int], v_sync: int) -> None:
+    assert cvt_rb(*size, 60).v_sync == v_sync
+
+
+def test_cvt_rb2_exact_step_boundary() -> None:
+    # Exactly 13.53 MHz; double arithmetic (and edid-decode) lands on 13.529.
+    assert cvt_rb2(800, 600, 25).pclk_mhz == 13.53

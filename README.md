@@ -16,10 +16,20 @@ uv run edidgen examples/virtual-display.toml            # validate, then write t
 uv run edidgen examples/virtual-display.toml --check    # validate only
 uv run edidgen examples/virtual-display.toml --decode   # write, then run edid-decode on it
 uv run edidgen config.toml -o out.bin                   # override the output path
+uv run edidgen config.toml --allow-invalid              # write it even if it breaks the spec
 ```
 
-Exit codes: `0` valid (and written), `1` config errors (nothing written), `2` file read/write failure.
-Warnings (duplicate modes, modes outside the declared range limits, …) are printed but don't block output.
+Exit codes: `0` written (or valid, with `--check`), `1` config errors (nothing written),
+`2` file read/write failure. Warnings (duplicate modes, modes outside the declared range
+limits, …) are printed but don't block output.
+
+`--allow-invalid` is for deliberately broken EDIDs, e.g. to test how a driver or parser
+copes. It writes the file despite *spec violations*: values the format can hold but the
+spec or decoders reject. Those are modes or VICs above `hdmi.max_tmds_mhz`, DTD pixel
+clocks below 10 MHz, `hdr.max_frame_avg_nits` above `max_luminance_nits`, and range limits
+with min > max. They're reported as `invalid (allowed)` and the summary says `INVALID`.
+Anything that can't be encoded at all (a name that doesn't fit, bit depth 9, porches wider
+than their bit fields, typos, wrong types) is still an error.
 
 ## Config
 

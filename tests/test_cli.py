@@ -124,3 +124,61 @@ def test_decode_runs_edid_decode(
 ) -> None:
     assert main([str(write(tmp_path, MINIMAL)), "--decode"]) == 0
     assert "EDID conformity:" in capfd.readouterr().out
+
+
+TMDS_VIOLATION = "vics = []\n[[modes]]\nwidth = 2560\nheight = 1440\nrefresh = 120\n"
+
+
+def test_violation_points_to_allow_invalid(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = write(tmp_path, TMDS_VIOLATION)
+    assert main([str(cfg)]) == 1
+    err = capsys.readouterr().err
+    assert "1 error; no file written." in err
+    assert (
+        "--allow-invalid would write the EDID anyway (these are spec violations)."
+        in err
+    )
+    assert not (tmp_path / "cfg.bin").exists()
+
+
+def test_allow_invalid_writes_and_labels_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = write(tmp_path, TMDS_VIOLATION)
+    assert main([str(cfg), "--allow-invalid"]) == 0
+    out, err = capsys.readouterr()
+    assert "invalid (allowed): modes[0]: 2560x1440@120.00 needs 497.75 MHz" in err
+    assert "INVALID (1 allowed violation)" in out
+    edid = (tmp_path / "cfg.bin").read_bytes()
+    assert (
+        int.from_bytes(edid[54:56], "little") == 49775
+    )  # the over-limit mode is there
+
+
+def test_hint_counts_only_violations(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # One real error (name type) and one field-level violation (inverted range).
+    text = (
+        "vics = []\n[display]\nname = 1\n[range]\nvrefresh_hz = [120, 24]\n"
+        + MINIMAL.split("\n", 1)[1]
+    )
+    assert main([str(write(tmp_path, text))]) == 1
+    err = capsys.readouterr().err
+    assert "2 errors; no file written." in err
+    assert (
+        "1 of these is a spec violation that --allow-invalid accepts; the rest must be fixed."
+        in err
+    )
+
+
+def test_allow_invalid_does_not_bypass_real_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = write(tmp_path, '[display]\nname = "this is far too long"\n' + MINIMAL)
+    assert main([str(cfg), "--allow-invalid"]) == 1
+    err = capsys.readouterr().err
+    assert "display.name: must be 1-13 printable ASCII characters" in err
+    assert "allow-invalid" not in err.split("no file written.")[1]

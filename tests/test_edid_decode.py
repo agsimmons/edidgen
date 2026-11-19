@@ -18,7 +18,7 @@ import pytest
 from helpers import GOLDEN_BIN, MINIMAL, build_text, parse_text
 
 from edidgen import Timing, build_edid
-from edidgen.encode import dtd_limit_errors
+from edidgen.encode import dtd_limit_errors, dtd_violations
 from edidgen.timing import ReducedBlanking, cvt_exact
 
 
@@ -191,7 +191,12 @@ def round_trip_timings() -> list[Timing]:
         cvt_exact(w, h, hz, rb, **opts).timing
         for (w, h), hz, (rb, opts) in itertools.product(sizes, [30, 60, 120], VARIANTS)
     ]
-    return [t for t in timings + edge_timings() if not dtd_limit_errors(t)]
+    # Only DTDs edid-decode accepts; below 10 MHz it shows the raw bytes instead.
+    return [
+        t
+        for t in timings + edge_timings()
+        if not dtd_limit_errors(t) + dtd_violations(t)
+    ]
 
 
 def decoded_dtds(edid: bytes, tmp_path: Path) -> list[Timing]:

@@ -391,3 +391,84 @@ def test_high_rb3_v_blank_warns() -> None:
     assert diag.warnings == [
         "modes[0].v_blank_us: above 705 may not be supported by RB3 sources"
     ]
+
+
+# --- Spec violations and allow_invalid ------------------------------------------------
+
+LOW_CLOCK_MODE = (
+    "[[modes]]\nwidth = 640\nheight = 480\npixel_clock_mhz = 5\n"
+    "h_front = 16\nh_sync = 96\nh_back = 48\nv_front = 10\nv_sync = 2\nv_back = 33\n"
+)
+VIOLATIONS = {
+    "mode above TMDS": (
+        "vics = []\n[[modes]]\nwidth = 2560\nheight = 1440\nrefresh = 120\n",
+        "modes[0]: 2560x1440@120.00 needs 497.75 MHz but hdmi.max_tmds_mhz is 340",
+    ),
+    "VIC above TMDS": (
+        MINIMAL.replace("[16]", "[97]"),
+        "vics[0]: VIC 97 (3840x2160@60) needs 594",
+    ),
+    "DTD under 10 MHz": (
+        "vics = []\n" + LOW_CLOCK_MODE,
+        "modes[0]: pixel clock 5.00 MHz is below",
+    ),
+    "HDR average above max": (
+        with_tables("[hdr]\nmax_luminance_nits = 100\nmax_frame_avg_nits = 200"),
+        "hdr.max_frame_avg_nits: cannot exceed max_luminance_nits",
+    ),
+    "inverted range": (
+        with_tables("[range]\nvrefresh_hz = [120, 24]"),
+        "range.vrefresh_hz: min 120 is greater than max 24",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", VIOLATIONS)
+def test_violation_blocks_by_default(name: str) -> None:
+    text, expected = VIOLATIONS[name]
+    cfg, diag = parse_text(text)
+    assert cfg is None
+    assert any(e.startswith(expected) for e in diag.errors), diag.errors
+    assert diag.blocking_violations == len(diag.errors)
+
+
+@pytest.mark.parametrize("name", VIOLATIONS)
+def test_violation_is_allowed_with_allow_invalid(name: str) -> None:
+    text, expected = VIOLATIONS[name]
+    cfg, diag = parse_text(text, allow_invalid=True)
+    assert cfg is not None, diag.errors
+    assert diag.errors == []
+    assert any(v.startswith(expected) for v in diag.allowed_violations)
+    assert diag.blocking_violations == 0
+
+
+def test_allowed_invalid_values_are_kept() -> None:
+    cfg, _ = parse_text("vics = [97]\n" + LOW_CLOCK_MODE, allow_invalid=True)
+    assert cfg is not None
+    assert cfg.modes[0].pclk_mhz == 5.0
+    assert cfg.vics == (97,)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        with_tables('[display]\nname = "fourteen chars"'),  # doesn't fit the descriptor
+        with_tables("[hdr]\nmax_luminance_nits = 20"),  # luminance codes start at 50
+        with_tables("[hdmi]\nmax_tmds_mhz = 342"),  # stored in 5 MHz units
+        MINIMAL.replace("[16]", "[200]"),  # unknown VIC
+        "vics = []\n"
+        + LOW_CLOCK_MODE.replace("v_front = 10", "v_front = 70"),  # 6-bit field
+    ],
+)
+def test_unencodable_values_stay_errors(text: str) -> None:
+    cfg, diag = parse_text(text, allow_invalid=True)
+    assert cfg is None
+    assert diag.errors
+    assert diag.blocking_violations == 0
+
+
+def test_explicit_pixel_clock_floor_is_the_dtd_minimum() -> None:
+    errors = errors_of("vics = []\n" + LOW_CLOCK_MODE.replace("= 5\n", "= 0.001\n"))
+    assert errors == [
+        "modes[0].pixel_clock_mhz: must be between 0.01 and 655.35 (got 0.001)"
+    ]

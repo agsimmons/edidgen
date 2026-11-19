@@ -2,14 +2,13 @@
 
 from typing import Final
 
-from edidgen.encode import cta_data_blocks, dtd_limit_errors
+from edidgen.encode import cta_data_blocks, dtd_limit_errors, dtd_violations
 from edidgen.model import Config, Display, Hdmi, Hdr, RangeLimits, Timing, TimingKind
 from edidgen.reader import Diagnostics, Reader, Table
 from edidgen.tables import (
     BIT_DEPTHS,
     DEEP_COLOR_BITS,
     DTD_MAX_PCLK_MHZ,
-    DTD_MIN_PCLK_MHZ,
     INTERFACES,
     VICS,
 )
@@ -64,7 +63,8 @@ def _parse_explicit(r: Reader, width: int, height: int, *, interlaced: bool) -> 
         if not r.has(k):
             r.diag.error(r.where(k), 'required for timing = "explicit"')
     return Timing(
-        pclk_mhz=r.number("pixel_clock_mhz", 0.0, DTD_MIN_PCLK_MHZ, DTD_MAX_PCLK_MHZ),
+        # 0.01 MHz is the smallest a DTD can hold; below 10 MHz is a violation.
+        pclk_mhz=r.number("pixel_clock_mhz", 0.0, 0.01, DTD_MAX_PCLK_MHZ),
         h_active=width,
         h_front=r.integer("h_front", 0, 0, 1023),
         h_sync=r.integer("h_sync", 0, 1, 1023),
@@ -149,7 +149,9 @@ def parse_mode(r: Reader) -> Timing | None:
     limits = dtd_limit_errors(timing)
     for msg in limits:
         r.diag.error(r.path, msg)
-    return None if limits else timing
+    for msg in dtd_violations(timing):
+        r.diag.violation(r.path, msg)
+    return None if len(r.diag.errors) != n_errors else timing
 
 
 def parse_config(data: Table, diag: Diagnostics) -> Config | None:
@@ -230,7 +232,9 @@ def parse_config(data: Table, diag: Diagnostics) -> Config | None:
         if 0 < nits < 50:
             diag.error(x.where(key), "must be 0 (unspecified) or at least 50")
     if hdr.max_frame_avg_nits > hdr.max_luminance_nits > 0:
-        diag.error(x.where("max_frame_avg_nits"), "cannot exceed max_luminance_nits")
+        diag.violation(
+            x.where("max_frame_avg_nits"), "cannot exceed max_luminance_nits"
+        )
     x.finish()
 
     g = root.table_("range")
@@ -244,7 +248,7 @@ def parse_config(data: Table, diag: Diagnostics) -> Config | None:
         ("hfreq_khz", range_limits.hfreq_khz),
     ):
         if pair and pair[0] > pair[1]:
-            diag.error(g.where(key), f"min {pair[0]} is greater than max {pair[1]}")
+            diag.violation(g.where(key), f"min {pair[0]} is greater than max {pair[1]}")
     g.finish()
 
     mode_readers = root.table_list("modes")
@@ -291,7 +295,7 @@ def cross_check(cfg: Config, diag: Diagnostics) -> None:
             diag.warn(where, f"{t.label()} duplicates {seen[key]}")
         seen.setdefault(key, where)
         if cfg.hdmi.enabled and t.pclk_mhz > cfg.hdmi.max_tmds_mhz:
-            diag.error(
+            diag.violation(
                 where,
                 f"{t.label()} needs {t.pclk_mhz:.2f} MHz but hdmi.max_tmds_mhz is "
                 f"{cfg.hdmi.max_tmds_mhz}; the driver would drop this mode",
@@ -305,7 +309,7 @@ def cross_check(cfg: Config, diag: Diagnostics) -> None:
     for i, v in enumerate(cfg.vics):
         vic = VICS[v]
         if cfg.hdmi.enabled and vic.pclk_mhz > cfg.hdmi.max_tmds_mhz:
-            diag.error(
+            diag.violation(
                 f"vics[{i}]",
                 f"VIC {v} ({vic.width}x{vic.height}@{vic.refresh:g}) needs "
                 f"{vic.pclk_mhz:g} MHz but hdmi.max_tmds_mhz is {cfg.hdmi.max_tmds_mhz}",

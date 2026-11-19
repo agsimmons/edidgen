@@ -11,11 +11,29 @@ Table = Mapping[str, object]
 
 @dataclass
 class Diagnostics:
+    """Problems found while validating a config.
+
+    - errors: the config can't be encoded (bad types, typos, values that don't fit).
+    - violations: encodable but not spec-conformant. Errors by default; with
+      `allow_invalid` they are kept in `allowed_violations` and don't block output.
+    - warnings: inconsistencies that still give a usable EDID.
+    """
+
+    allow_invalid: bool = False
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    allowed_violations: list[str] = field(default_factory=list)
+    blocking_violations: int = 0
 
     def error(self, where: str, msg: str) -> None:
         self.errors.append(f"{where}: {msg}")
+
+    def violation(self, where: str, msg: str) -> None:
+        if self.allow_invalid:
+            self.allowed_violations.append(f"{where}: {msg}")
+        else:
+            self.errors.append(f"{where}: {msg}")
+            self.blocking_violations += 1
 
     def warn(self, where: str, msg: str) -> None:
         self.warnings.append(f"{where}: {msg}")

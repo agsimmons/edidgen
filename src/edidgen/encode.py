@@ -29,13 +29,6 @@ def dtd_limit_errors(t: Timing) -> list[str]:
                 "less blanking"
             ),
         ),
-        (
-            t.pclk_mhz >= DTD_MIN_PCLK_MHZ,
-            (
-                f"pixel clock {t.pclk_mhz:.2f} MHz is below the DTD minimum of "
-                f"{DTD_MIN_PCLK_MHZ:g} MHz; decoders treat it as invalid"
-            ),
-        ),
         (t.h_blank <= 4095, f"horizontal blanking {t.h_blank} exceeds 4095"),
         (t.v_blank <= 4095, f"vertical blanking {t.v_blank} exceeds 4095"),
         (t.h_front <= 1023 and t.h_sync <= 1023, "h_front/h_sync exceed 1023"),
@@ -44,6 +37,17 @@ def dtd_limit_errors(t: Timing) -> list[str]:
         (not t.interlaced or t.v_active % 2 == 0, "interlaced height must be even"),
     ]
     return [msg for ok, msg in checks if not ok]
+
+
+def dtd_violations(t: Timing) -> list[str]:
+    """Encodable, but outside what decoders accept."""
+    if t.pclk_mhz < DTD_MIN_PCLK_MHZ:
+        msg = (
+            f"pixel clock {t.pclk_mhz:.2f} MHz is below the DTD minimum of "
+            f"{DTD_MIN_PCLK_MHZ:g} MHz; decoders treat it as invalid"
+        )
+        return [msg]
+    return []
 
 
 def image_size_mm(t: Timing, size_cm: tuple[int, int]) -> tuple[int, int]:

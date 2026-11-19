@@ -25,8 +25,10 @@ def with_tables(tables: str, top: str = "vics = [16]") -> str:
     return f"{top}\n{tables}\n{MODE}"
 
 
-def parse_text(text: str) -> tuple[Config | None, Diagnostics]:
-    diag = Diagnostics()
+def parse_text(
+    text: str, *, allow_invalid: bool = False
+) -> tuple[Config | None, Diagnostics]:
+    diag = Diagnostics(allow_invalid=allow_invalid)
     return parse_config(tomllib.loads(text), diag), diag
 
 

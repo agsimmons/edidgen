@@ -39,8 +39,16 @@ The edid-decode tests skip if it isn't installed. Run all three checks before co
   Messages name the exact key (`modes[2].timing`) and say what is allowed.
 - Every key must be read via a `Reader` method (or added to `seen`). `finish()` reports the
   rest as "unknown option".
-- Errors are things the driver or format would reject. Warnings are inconsistencies that
-  still produce a usable EDID.
+- Three kinds of finding, all recorded in `Diagnostics`:
+  - `error`: can't be encoded or isn't a valid config (types, typos, values that don't fit
+    their byte fields). Always blocks output.
+  - `violation`: encodable but not spec-conformant (e.g. a mode above the HDMI TMDS limit,
+    DTD clock < 10 MHz). Blocks output unless `Diagnostics(allow_invalid=True)`
+    (`--allow-invalid`), which moves it to `allowed_violations`. When adding a check, use
+    this only if the bytes can still represent the value.
+  - `warning`: inconsistent but still a usable EDID.
+- Cross-field checks (`cross_check`) only run once every field is valid, so some violations
+  only appear after other errors are fixed.
 - `tests/data/virtual-display.bin` is a golden file: `test_example_config_matches_golden_binary`
   checks that `examples/virtual-display.toml` still builds it byte-for-byte. If an encoding
   change is intentional, regenerate it

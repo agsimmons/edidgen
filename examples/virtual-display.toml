@@ -1,0 +1,71 @@
+# Example edidgen config: a virtual 1440p/4K HDMI display (e.g. for Sunshine streaming).
+# Documents every option. tests/data/virtual-display.bin is its expected output.
+#   uv run edidgen virtual-display.toml            -> virtual-display.bin
+#   uv run edidgen virtual-display.toml --check    validate only
+# Unknown keys are reported as errors, so typos don't silently do nothing.
+
+output = "virtual-display.bin"   # relative to this file; -o overrides
+
+# Top-level keys must come before the first [table] header (TOML rule).
+# Standard CTA-861 modes by VIC. Run with an invalid number to see the list.
+#   97 = 2160p60, 16 = 1080p60, 63 = 1080p120, 4 = 720p60, 1 = 640x480
+vics = [97, 16, 63, 4, 1]
+# native_vic = 16         # optional: mark one VIC as native
+
+[display]
+name = "VirtDisplay"      # 1-13 printable ASCII chars, shown in display settings
+manufacturer = "VDS"      # 3 uppercase letters (PNP ID)
+product_code = 0x5355     # 0-65535
+serial = 0
+week = 1                  # 0-54
+year = 2026
+size_cm = [60, 34]        # physical size; affects DPI hints only
+gamma = 2.2
+bit_depth = 10            # 6, 8, 10, 12, 14, 16
+interface = "hdmi-a"      # none, dvi, hdmi-a, hdmi-b, mddi, dp
+
+[hdmi]                    # HDMI VSDB + HDMI Forum VSDB (enabled by default for hdmi-*)
+max_tmds_mhz = 600        # 340 = HDMI 1.4, 600 = HDMI 2.0; modes above this are rejected
+deep_color = [30, 36]     # 30, 36, 48 bit
+y444_deep_color = true
+scdc = true
+
+[hdr]
+enabled = true            # HDR static metadata block (SDR + PQ)
+bt2020 = true             # colorimetry block
+max_luminance_nits = 670
+max_frame_avg_nits = 350
+
+[range]                   # display range limits; omit any of these to derive from the modes
+vrefresh_hz = [24, 120]
+hfreq_khz = [15, 255]
+max_pixel_clock_mhz = 600
+
+# Detailed modes. The first one is the preferred mode. Up to 2 go in the base
+# block; the rest go in the CTA block (the tool tells you if they don't fit).
+#   timing = "cvt-rb"   (default) VESA reduced blanking v1: width, height, refresh
+#   timing = "cvt-rb2"  reduced blanking v2, lower pixel clock (e.g. 1440p144 fits 600 MHz)
+#   timing = "explicit" give pixel_clock_mhz, h/v_front, h/v_sync, h/v_back,
+#                       h/v_sync_positive yourself (implied if any is present)
+[[modes]]
+width = 2560
+height = 1440
+refresh = 60
+
+[[modes]]
+width = 2560
+height = 1440
+refresh = 120
+
+[[modes]]                 # CTA 2160p60 timing (same as VIC 97), explicit
+width = 3840
+height = 2160
+pixel_clock_mhz = 594
+h_front = 176
+h_sync = 88
+h_back = 296
+v_front = 8
+v_sync = 10
+v_back = 72
+h_sync_positive = true
+v_sync_positive = true

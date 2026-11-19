@@ -1,5 +1,7 @@
 # edidgen
 
+[![PyPI](https://img.shields.io/pypi/v/edidgen)](https://pypi.org/project/edidgen/)
+
 Generate EDID binaries (128-byte base block + CTA-861 extension) from a TOML config.
 The config is fully validated first, and every problem is reported with its location
 (`modes[2].timing: must be one of ...`). The `.bin` is only written when there are no errors.

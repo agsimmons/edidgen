@@ -112,7 +112,7 @@ def parse_config(data: Table, diag: Diagnostics) -> Config | None:
     output = root.string("output", "") or None
 
     d = root.table_("display")
-    manufacturer = d.string("manufacturer", "VDS")
+    manufacturer = d.string("manufacturer", "XXX")
     if not (
         len(manufacturer) == 3
         and manufacturer.isascii()

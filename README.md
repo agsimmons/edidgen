@@ -52,6 +52,14 @@ refresh = 60                       # timing = "cvt-rb" (default) | "cvt-rb2" | "
 Modes can use generated VESA CVT reduced-blanking timings (`cvt-rb`, `cvt-rb2`), whose
 output matches `edid-decode --cvt`, or fully explicit timings.
 
+How the display is named in desktop settings comes from `[display]`:
+
+- `manufacturer` (default `XXX`) is looked up in hwdata's `pnp.ids`, and a registered code
+  shows that company's name. Unregistered codes are shown as-is.
+- `serial` defaults to `0` (none). KWin then adds the connector to the model name
+  (`XXX HDMI-A-1-VirtDisplay`) and ties the display's saved settings to that port. Set any
+  nonzero serial to get `XXX VirtDisplay`.
+
 What gets checked includes types and ranges of every field, unknown keys (typos), the
 field-width limits of an 18-byte detailed timing descriptor (pixel clock ≤ 655.35 MHz,
 porch sizes), modes and VICs that need more than `hdmi.max_tmds_mhz`, and whether all

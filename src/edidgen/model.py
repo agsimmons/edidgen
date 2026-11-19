@@ -49,7 +49,7 @@ class Timing:
 @dataclass(frozen=True)
 class Display:
     name: str = "VirtDisplay"
-    manufacturer: str = "VDS"
+    manufacturer: str = "XXX"
     product_code: int = 0
     serial: int = 0
     week: int = 1

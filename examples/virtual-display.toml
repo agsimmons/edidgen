@@ -14,9 +14,14 @@ vics = [97, 16, 63, 4, 1]
 
 [display]
 name = "VirtDisplay"      # 1-13 printable ASCII chars, shown in display settings
-manufacturer = "VDS"      # 3 uppercase letters (PNP ID)
+manufacturer = "XXX"      # 3 uppercase letters (PNP ID). Desktops look this up in
+                          # hwdata's pnp.ids and show the company name, so pick an
+                          # unregistered code; unknown codes are shown as-is.
 product_code = 0x5355     # 0-65535
-serial = 0
+serial = 0                # 0 = none. With no serial, KWin adds the connector to the
+                          # model name (e.g. "XXX HDMI-A-1-VirtDisplay") and ties the
+                          # display's saved settings to that port. Any nonzero value
+                          # gives just "XXX VirtDisplay".
 week = 1                  # 0-54
 year = 2026
 size_cm = [60, 34]        # physical size; affects DPI hints only

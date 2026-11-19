@@ -87,3 +87,7 @@ uv run ty check
 ```
 
 Tests that compare against `edid-decode` are skipped when it isn't installed.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
